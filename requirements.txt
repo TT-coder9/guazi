@@ -1,0 +1,9 @@
+# 核心依赖
+requests>=2.28.0
+lxml>=4.9.0
+cssselect>=1.2.0          # lxml 的 CSS 选择器依赖，缺了会报 ImportError
+pandas>=2.0.0
+openpyxl>=3.1.0           # 导出 .xlsx 用
+
+# 浏览器引擎（只跑 --engine requests 时可跳过，但装了才能用默认模式）
+playwright>=1.40.0

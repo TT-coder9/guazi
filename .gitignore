@@ -1,0 +1,29 @@
+# ---- 密钥与私人配置（绝对不要提交）----
+api_url.txt
+.env
+
+# ---- 运行时生成的文件 ----
+ip_list.txt
+ip_local.txt
+*.log
+__pycache__/
+*.py[cod]
+*$py.class
+
+# ---- 抓取结果 ----
+瓜子二手车_*.xlsx
+瓜子二手车_*.csv
+output/
+results/
+
+# ---- 虚拟环境 ----
+.venv/
+venv/
+env/
+
+# ---- 编辑器与系统文件 ----
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
