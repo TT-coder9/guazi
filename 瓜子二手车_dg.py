@@ -501,9 +501,11 @@ class PlaywrightSession:
 	"""常驻的可见浏览器会话，供「手动筛选 → 逐页抓取」全程复用。"""
 
 	def __init__(self, headless: bool = False,
-				 user_data_dir: Optional[str] = None) -> None:
+				 user_data_dir: Optional[str] = None,
+				 proxy: Optional[str] = None) -> None:
 		self.headless = headless
 		self.user_data_dir = user_data_dir
+		self.proxy = proxy              # 当前生效的出口代理，None = 直连本机
 		self._pw = None
 		self._browser = None
 		self._ctx = None
@@ -561,13 +563,54 @@ class PlaywrightSession:
 				"  ② 装 Microsoft Edge 或 Google Chrome（程序会自动改用它们）\n"
 				f"  最后一次错误：{last_err}"
 			)
-		self._ctx = self._browser.new_context(
+		self._new_context()
+
+	def _new_context(self) -> None:
+		"""
+		按当前 self.proxy 建一个浏览器上下文。
+
+		★ 代理就挂在这一层：new_context(proxy={"server": "http://ip:port"})。
+		  建好之后，这个上下文里发出的所有请求 —— 页面、图片、CSS、XHR ——
+		  全部从那个代理 IP 出去，而不是从你家宽带的 IP 出去。
+		  实测确认：上下文级代理与 launch 级（--proxy-server）同样有效，
+		  但不用重启浏览器进程，换 IP 只要零点几秒。
+		"""
+		kwargs: Dict[str, Any] = dict(
 			user_agent=UA,
 			locale="zh-CN",
 			viewport={"width": 1440, "height": 900},
 			extra_http_headers={"Referer": f"{SITE_HOST}/{CITY_PATH}/"},
 		)
+		if self.proxy:
+			kwargs["proxy"] = {"server": self.proxy}
+		self._ctx = self._browser.new_context(**kwargs)
 		self.page = self._ctx.new_page()
+
+	def set_proxy(self, proxy: Optional[str], keep_cookies: bool = True) -> None:
+		"""
+		★ 换一个出口 IP：关掉旧上下文，用新代理开一个新的。浏览器进程不重启。
+
+		keep_cookies=True 会把旧上下文里的 Cookie 搬到新上下文 ——
+		这样之前已经过掉的滑块验证、浏览痕迹不会因为换 IP 而全部丢失
+		（丢 Cookie 常常意味着刚过完验证又要重新过一遍）。
+		"""
+		if proxy == self.proxy and self._ctx is not None:
+			return                      # 还是同一个 IP，什么都不用做
+
+		old_cookies = self.cookies() if (keep_cookies and self._ctx is not None) else []
+		old_ctx, self._ctx, self.page = self._ctx, None, None
+		self.proxy = proxy
+		if old_ctx is not None:
+			try:
+				old_ctx.close()
+			except Exception:
+				pass
+		self._new_context()
+		if old_cookies:
+			try:
+				self._ctx.add_cookies(old_cookies)
+			except Exception as e:
+				vlog(f"    [playwright] Cookie 迁移失败：{type(e).__name__}")
 
 	def close(self) -> None:
 		for obj in (self._ctx, self._browser):
@@ -585,13 +628,32 @@ class PlaywrightSession:
 		self._pw = self._browser = self._ctx = self.page = None
 
 	def goto(self, url: str, timeout: int = 60000) -> bool:
+		"""
+		打开页面。用 wait_until="commit"（只等服务器响应头回来就返回），
+		不等 domcontentloaded —— 实测 Edge 无头模式下这个事件经常迟迟不触发，
+		死等它会把「其实已经加载好的页面」误判成超时。内容交给 wait_ready 轮询。
+		"""
 		try:
-			self.page.goto(url, timeout=timeout, wait_until="domcontentloaded")
+			self.page.goto(url, timeout=timeout, wait_until="commit")
 			return True
 		except Exception as e:
 			vlog(f"    [playwright] goto 异常（{type(e).__name__}），"
 				 f"仍尝试取当前页面：{e}")
 			return False
+
+	def wait_ready(self, timeout: float = 25.0) -> str:
+		"""轮询页面内容，直到出现房源卡片（car-box）或超时，返回那一刻的 HTML。"""
+		deadline = time.time() + timeout
+		html = ""
+		while time.time() < deadline:
+			try:
+				html = self.page.content()
+			except Exception:
+				html = ""
+			if "car-box" in html:
+				break
+			time.sleep(0.3)
+		return html
 
 	def wait_cards(self, timeout: int = 20000) -> int:
 		try:
@@ -619,42 +681,109 @@ class PlaywrightSession:
 			pass
 
 
+def attach_first_proxy(session: PlaywrightSession,
+					   pool: Optional[Any]) -> None:
+	"""给浏览器挂上池里的第一个 IP。
+
+	手动筛选模式一打开浏览器就得走代理 —— 本机 IP 被封时，
+	不带代理连筛选页都打不开，后面根本无从谈起。
+	"""
+	if session is None or pool is None:
+		return
+	try:
+		ip = pool.get()["http"]
+		session.set_proxy(ip)
+		print(f"[IP池] 浏览器出口已切到 {ip}")
+	except Exception as e:
+		print(f"[警告] 给浏览器挂代理失败：{type(e).__name__}: {e}")
+
+
 def fetch_html_playwright(session: PlaywrightSession, url: str,
-						  page_no: int, headless: bool
+						  page_no: int, headless: bool,
+						  pool: Optional[Any] = None
 						  ) -> Tuple[Optional[str], Optional[str]]:
-	"""用现有浏览器会话抓一页。返回 (html, 失败原因)。"""
+	"""
+	用浏览器抓一页。返回 (html, 失败原因)。
+
+	【★ 代理接入点 —— 浏览器模式下 IP 池唯一生效的地方 】
+	  pool 不为 None 时，每次尝试（含每次重试）都做三步：
+	    1) pool.get()        从池里取一个 IP（顺序轮换，用完会自动补货）
+	    2) session.set_proxy 把它挂到浏览器上下文上，从这一刻起
+	                         页面 / 图片 / XHR 全部从该 IP 出去
+	    3) 抓完打分          成功 report_good（失败计数清零）
+	                         失败 report_bad（同一 IP 连续失败 3 次即踢出池子）
+
+	  下面四种情况都算「这一页失败」，会换下一个 IP 重试：
+	    · 代理本身连不上（页面打不开）
+	    · 命中滑块验证 / 拦截页
+	    · 页面打开了但没有房源卡片（多半是反爬给的兜底页）
+	    · 请求超时
+	"""
+	last_err: Optional[str] = None
+
 	for attempt in range(1, RETRY_PER_PAGE + 1):
-		vlog(f"  [第 {page_no} 页] 浏览器打开（{attempt}/{RETRY_PER_PAGE}）：{url}")
+		# ---- ★ 第 1 步：取 IP 并挂到浏览器上 ----
+		cur_ip: Optional[str] = None
+		if pool is not None:
+			try:
+				proxies = pool.get()
+				cur_ip = proxies.get("http") or proxies.get("https")
+				session.set_proxy(cur_ip)
+				vlog(f"  [第 {page_no} 页] 经代理 {cur_ip} 打开"
+					 f"（{attempt}/{RETRY_PER_PAGE}）：{url}")
+			except Exception as e:
+				print(f"  [第 {page_no} 页] ✗ 取 IP 失败：{type(e).__name__}: {e}")
+				last_err = f"取 IP 失败：{e}"
+				continue
+		else:
+			vlog(f"  [第 {page_no} 页] 浏览器打开（{attempt}/{RETRY_PER_PAGE}）：{url}")
+
+		# ---- 第 2 步：真正打开页面 ----
 		session.goto(url)
-		n = session.wait_cards(timeout=20000 if attempt == 1 else 12000)
-		time.sleep(1.5)
-		html = session.content()
+		html = session.wait_ready(timeout=25.0 if attempt == 1 else 18.0)
+		n = 0
+		try:
+			n = session.page.locator(SEL["CAR_CARD"]).count()
+		except Exception:
+			pass
 		final_url = session.current_url()
 
 		vlog(f"    最终地址 {final_url}")
 		vlog(f"    HTML {len(html)} 字符 | 卡片 {n} 个")
 
 		block = is_block_page(html, final_url)
-		if not block:
+		ok = (not block) and ("car-box" in html or n > 0)
+
+		# ---- ★ 第 3 步：给这个 IP 打分 ----
+		if pool is not None and cur_ip:
+			if ok:
+				pool.report_good(cur_ip)
+			else:
+				pool.report_bad(cur_ip)
+				reason = short_reason(block) if block else "页面无房源卡片"
+				print(f"  [第 {page_no} 页] ✗ 代理 {cur_ip} 抓不到（{reason}），"
+					  f"换下一个 IP 重试")
+
+		if ok:
 			return html, None
 
-		if headless:
-			print(f"  [第 {page_no} 页] ✗ 被拦截（{block}），无头模式无法人工处理，跳过本页")
-			return None, block
+		last_err = block or "页面无房源卡片"
 
-		print(f"  [第 {page_no} 页] ✗ 被拦截（{short_reason(block)}）")
-		print("    请在弹出的浏览器里手动把滑块验证拖过去，"
-			  "看到房源列表后回到这里按回车继续本页抓取…")
-		try:
-			input("    >>> 过完滑块后按回车重试本页（直接回车即可）: ")
-		except (EOFError, KeyboardInterrupt, OSError):
-			print("    未收到确认，跳过本页")
-			return None, block
+		# 没有池子时保留老逻辑：提示人工过滑块
+		if pool is None and block and not headless:
+			print(f"  [第 {page_no} 页] ✗ 被拦截（{short_reason(block)}）")
+			print("    请在弹出的浏览器里手动把滑块验证拖过去，"
+				  "看到房源列表后回到这里按回车继续本页抓取…")
+			try:
+				input("    >>> 过完滑块后按回车重试本页（直接回车即可）: ")
+			except (EOFError, KeyboardInterrupt, OSError):
+				print("    未收到确认，跳过本页")
+				return None, last_err
 
-		if attempt >= RETRY_PER_PAGE:
-			break
+		if attempt < RETRY_PER_PAGE:
+			time.sleep(random.uniform(1.0, 3.0))
 
-	return None, "多次重试仍被拦截"
+	return None, last_err or "多次重试仍失败"
 
 
 def fetch_html_requests(url: str, page_no: int,
@@ -1123,7 +1252,7 @@ def crawl(pages: int,
 
 			if engine == "playwright" and session is not None:
 				html_text, reason = fetch_html_playwright(
-					session, url, p, headless=headless)
+					session, url, p, headless=headless, pool=pool)
 			else:
 				html_text, reason = fetch_html_requests(url, p, referer, pool=pool)
 				if html_text is None and auto_fallback:
@@ -1135,7 +1264,7 @@ def crawl(pages: int,
 					try:
 						with PlaywrightSession(headless=fb_headless) as fb:
 							html_text, reason = fetch_html_playwright(
-								fb, url, p, headless=fb_headless)
+								fb, url, p, headless=fb_headless, pool=pool)
 					except SystemExit:
 						pass
 					except Exception as e:
@@ -1343,20 +1472,17 @@ def main() -> None:
 	# ------------------------------------------------------------------
 	pool = None
 	if args.proxy or args.proxy_api:
-		if args.engine != "requests":
-			print("[提示] IP 池只对 requests 引擎生效（浏览器模式下整段会话固定一个出口 IP）。")
-			print("       要测 IP 池，请加：--engine requests --no-manual")
-			print("       已自动忽略 --proxy\n")
+		# 两套引擎都支持 IP 池：requests 用 proxies 参数，浏览器用上下文级代理
+		pool = build_ip_pool(args.proxy_file, args.proxy_check,
+							 args.proxy_workers,
+							 rotate=(args.proxy_rotate == "round"),
+							 use_api=args.proxy_api)
+		if pool is None:
+			print("[警告] IP 池构建失败，本次改为直连抓取\n")
 		else:
-			pool = build_ip_pool(args.proxy_file, args.proxy_check,
-								 args.proxy_workers,
-								 rotate=(args.proxy_rotate == "round"),
-								 use_api=args.proxy_api)
-			if pool is None:
-				print("[警告] IP 池构建失败，本次改为直连抓取\n")
-			else:
-				print(f"[IP池] 就绪，可用 {pool.size()} 个"
-					  f"（取 IP 策略：{args.proxy_rotate}）：{pool.all()}\n")
+			target = "浏览器" if args.engine == "playwright" else "requests"
+			print(f"[IP池] 就绪，可用 {pool.size()} 个（引擎：{target}，"
+				  f"取 IP 策略：{args.proxy_rotate}）：{pool.all()}\n")
 
 	start_url: Optional[str] = None
 	filter_tag = ""
@@ -1384,6 +1510,7 @@ def main() -> None:
 			session = None
 
 		if session is not None:
+			attach_first_proxy(session, pool)
 			start_url = manual_pick_url(session, base_url)
 
 			if start_url and looks_like_captcha_url(start_url):

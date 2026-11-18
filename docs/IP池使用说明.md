@@ -82,13 +82,25 @@ api_url.txt ──请求──▶ 代理服务商 API ──▶ 10 个 ip:port
 
 ---
 
-## 为什么 IP 池对浏览器引擎无效
+## 浏览器引擎怎么挂 IP 池
 
-Playwright 启动时就把出口 IP 绑定在浏览器进程上，
-要在翻页中途换 IP 只能关掉浏览器重启，代价远大于收益。
+代理挂在**浏览器上下文**这一层，不在浏览器进程上：
 
-所以：**浏览器模式用来过反爬，requests 模式用来挂 IP 池**。
-两者可以配合——先用浏览器手动筛选拿到 URL 和 Cookie，再切 requests 挂代理抓。
+```python
+ctx = browser.new_context(proxy={"server": "http://ip:port"})
+```
+
+换 IP 就是关掉旧上下文、用新代理开一个新的 —— 浏览器进程不重启，实测零点几秒。
+旧上下文的 Cookie 会被搬到新上下文，已经过掉的滑块验证不会因为换 IP 而作废。
+
+两套引擎都能挂池，区别只是写法：
+
+| 引擎 | 代理挂在哪 |
+| --- | --- |
+| requests | `session.get(..., proxies={...})` |
+| playwright | `browser.new_context(proxy={...})` |
+
+实测：浏览器模式下每页都命中不同 IP；第 1 页前两个 IP 失败后自动换到第三个，成功抓到 40 条。
 
 ---
 
