@@ -49,7 +49,7 @@
 | **双引擎**   | `--engine playwright` 用真实浏览器翻页；`--engine requests` 直接 HTTP 请求，速度快 10 倍 |
 | **浏览器优先** | 默认走浏览器：页面筛选条件由你手动点选，程序照抄地址栏，不猜 URL 规则                                  |
 | **反爬处理**  | 随机延时、失败重试、兜底页识别、验证页识别、浏览器 Cookie 复用                                    |
-| **IP 池**  | 两套引擎都能挂代理池，每页换 IP：浏览器走上下文级代理、坏 IP 自动剔除、池空自动补货                               |
+| **IP 池**  | 两套引擎都能挂代理池，每页换 IP：浏览器走上下文级代理、坏 IP 自动剔除、池空自动补货                          |
 | **结构化输出** | 8 个字段的 Excel / CSV，字段清洗、价格解析、去重全部自动完成                                  |
 
 
@@ -73,18 +73,17 @@
 
 
 ```
-\# 1) 安装 Python 依赖
+\\# 1) 安装 Python 依赖
 
 pip install -r requirements.txt
 
-\# 2) 安装浏览器内核（只跑 requests 引擎可跳过）
+\\# 2) 安装浏览器内核（只跑 requests 引擎可跳过）
 
 python -m playwright install chromium
 ```
 
 > **下载太慢怎么办？**
->
->  程序内置了浏览器自动回退：自带 Chromium 找不到时，会自动改用系统已装的
+> 程序内置了浏览器自动回退：自带 Chromium 找不到时，会自动改用系统已装的
 > Microsoft Edge 或 Google Chrome 启动，不需要下载 150 MB 的内核。
 > 只有三者都没有时才会报错。
 
@@ -107,7 +106,7 @@ pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 
 
 ```
-python 瓜子二手车\_dg.py
+python 瓜子二手车\\\_dg.py
 ```
 
 运行后会：
@@ -125,15 +124,11 @@ python 瓜子二手车\_dg.py
 5. 抓完自动保存 Excel，然后关闭浏览器。
 
 > 为什么推荐它：瓜子的筛选是「页面跳转 + JS 渲染」出来的，URL 规则并不统一
-> （实测 
->
+> （实测
 > `/dg/bmw/price6/`
->
->  有效，而 
->
+> 有效，而
 > `?price=5,10`
->
->  会被忽略）。让你在浏览器里点一遍、
+> 会被忽略）。让你在浏览器里点一遍、
 > 程序直接照抄地址栏，是最不容易拼错的方式。
 
 ### 模式 B：requests 接口（快，不开浏览器）
@@ -141,19 +136,23 @@ python 瓜子二手车\_dg.py
 
 
 ```
-python 瓜子二手车\_dg.py --engine requests --no-manual --city dg --pages 5
+python 瓜子二手车\\\_dg.py --engine requests --no-manual --city dg --pages 5
 ```
 
 不弹窗、速度快，适合批量采集。但同时更容易触发风控，建议配合延时与重试使用。
 
 ### 模式 C：浏览器 + IP 池（本机 IP 被封时用这个）
 
-```bash
-# 代理直接挂在浏览器上：每页换一个 IP，打不开 / 被拦就自动换下一个
-python 瓜子二手车\_dg.py --engine playwright --no-manual --headless --pages 20 --proxy-api
+
+
+```
+\# 代理直接挂在浏览器上：每页换一个 IP，打不开 / 被拦就自动换下一个
+
+python 瓜子二手车\\\_dg.py --engine playwright --no-manual --headless --pages 20 --proxy-api
 ```
 
 换 IP 不重启浏览器进程，只重建一个上下文（实测零点几秒）；旧 Cookie 会迁移过去，
+
 已经过掉的滑块验证不会因为换 IP 而作废。
 
 ### 模式 D：requests + IP 池（大规模采集）
@@ -161,21 +160,19 @@ python 瓜子二手车\_dg.py --engine playwright --no-manual --headless --pages
 
 
 ```
-\# ① 用代理服务商 API 自动拉 IP（推荐）
+\\# ① 用代理服务商 API 自动拉 IP（推荐）
 
-python 瓜子二手车\_dg.py --engine requests --no-manual --city dg --proxy-api --pages 20 --csv
+python 瓜子二手车\\\_dg.py --engine requests --no-manual --city dg --proxy-api --pages 20 --csv
 
-\# ② 用自己准备的 IP 名单
+\\# ② 用自己准备的 IP 名单
 
-python 瓜子二手车\_dg.py --engine requests --no-manual --city dg --proxy --proxy-file my\_ips.txt
+python 瓜子二手车\\\_dg.py --engine requests --no-manual --city dg --proxy --proxy-file my\\\_ips.txt
 ```
 
 `--proxy-api` 会自动完成：**调 API 拉 IP → 逐个检测 → 剔除死 IP → 轮换抓取 → 池空自动补货**。
 
-> 搭配 IP 池时，必须加 
->
+> 搭配 IP 池时，必须加
 > `--engine requests`
->
 > 。浏览器模式下整段会话固定一个出口 IP，
 > 中途换 IP 要重启浏览器，代价大于收益。
 
@@ -221,10 +218,11 @@ python 瓜子二手车\_dg.py --engine requests --no-manual --city dg --proxy --
 | 反爬对抗    | **强**，真实浏览器指纹、Cookie、JS 全执行 | 弱，靠请求头与频率伪装    |
 | 速度      | 慢，每页 2\~5 秒                 | **快**，每页 < 1 秒 |
 | 依赖      | 需下载 Chromium                | 仅需 Python 库    |
-| 可挂 IP 池 | ✅ 每页可换 IP（上下文级代理）          | ✅ 每页可换 IP      |
+| 可挂 IP 池 | ✅ 每页可换 IP（上下文级代理）           | ✅ 每页可换 IP      |
 | 适合场景    | 少量精准采集、筛选条件复杂               | 大批量采集          |
 
 两者都能挂 IP 池。浏览器引擎更适合本机 IP 已被封的场景（手动筛选时人眼看得到页面），
+
 requests 引擎更适合大批量静默抓取。
 
 
@@ -261,33 +259,33 @@ requests 引擎更适合大批量静默抓取。
 ```
 .
 
-├── 瓜子二手车\_dg.py          # 主程序：双引擎抓取 + 解析 + 落盘
+├── 瓜子二手车\\\_dg.py          # 主程序：双引擎抓取 + 解析 + 落盘
 
-├── ip\_pool.py                # IP 池内核：检测 / 轮换 / 剔除 / 补货
+├── ip\\\_pool.py                # IP 池内核：检测 / 轮换 / 剔除 / 补货
 
-├── proxy\_api.py              # 调代理服务商 API 拉取 IP
+├── proxy\\\_api.py              # 调代理服务商 API 拉取 IP
 
 ├── requirements.txt          # Python 依赖清单
 
 ├── .gitignore                # 不上传的文件（密钥、结果、缓存）
 
-├── api\_url.example.txt       # API 链接模板（复制成 api\_url.txt 再填）
+├── api\\\_url.example.txt       # API 链接模板（复制成 api\\\_url.txt 再填）
 
-├── ip\_list.example.txt       # IP 名单模板
+├── ip\\\_list.example.txt       # IP 名单模板
 
 ├── tools/
 
-│   ├── diag\_proxy.py         # 代理分层体检
+│   ├── diag\\\_proxy.py         # 代理分层体检
 
-│   ├── verify\_exit\_ip.py     # 验证流量是否真的走了代理
+│   ├── verify\\\_exit\\\_ip.py     # 验证流量是否真的走了代理
 
-│   ├── verify\_browser\_proxy.py # 验证浏览器出口 IP 是否等于代理 IP
+│   ├── verify\\\_browser\\\_proxy.py # 验证浏览器出口 IP 是否等于代理 IP
 
-│   └── local\_proxy.py        # 本地自建代理（没 IP 时验证代码链路用）
+│   └── local\\\_proxy.py        # 本地自建代理（没 IP 时验证代码链路用）
 
 └── docs/
 
-&#x20;   └── IP池使用说明.md        # IP 池详细用法与实测数据
+\&#x20;   └── IP池使用说明.md        # IP 池详细用法与实测数据
 ```
 
 
@@ -299,29 +297,29 @@ requests 引擎更适合大批量静默抓取。
 
 
 ```
-api\_url.txt ──请求──▶ 代理服务商 ──▶ 10 个 ip:port
+api\\\_url.txt ──请求──▶ 代理服务商 ──▶ 10 个 ip:port
 
-&#x20;                                     │
+\&#x20;                                     │
 
-&#x20;                                     ▼
+\&#x20;                                     ▼
 
-&#x20;                       写 ip\_list.txt，逐个真发一次请求检测
+\&#x20;                       写 ip\\\_list.txt，逐个真发一次请求检测
 
-&#x20;                                     │
+\&#x20;                                     │
 
-&#x20;                     ├─ 200 且页面含关键元素 ──▶ 进池
+\&#x20;                     ├─ 200 且页面含关键元素 ──▶ 进池
 
-&#x20;                     └─ 超时 / 拒绝 / 被拦 / 兜底页 ──▶ 丢弃
+\&#x20;                     └─ 超时 / 拒绝 / 被拦 / 兜底页 ──▶ 丢弃
 
 抓取：第 1 页 → 池里第 1 个 IP
 
-&#x20;     第 2 页 → 池里第 2 个 IP     （--proxy-rotate round 顺序轮换）
+\&#x20;     第 2 页 → 池里第 2 个 IP     （--proxy-rotate round 顺序轮换）
 
-&#x20;     某页失败 → 换下一个 IP 重试（最多 4 次）
+\&#x20;     某页失败 → 换下一个 IP 重试（最多 4 次）
 
-&#x20;     同一 IP 连续失败 3 次 → 踢出池子
+\&#x20;     同一 IP 连续失败 3 次 → 踢出池子
 
-&#x20;     池子被踢空 → 自动再调一次 API 补货
+\&#x20;     池子被踢空 → 自动再调一次 API 补货
 ```
 
 上面这套流程 requests 与浏览器两种引擎通用，区别只在「代理挂在哪」：
